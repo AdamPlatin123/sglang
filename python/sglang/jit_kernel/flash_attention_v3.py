@@ -173,10 +173,8 @@ def flash_attn_with_kvcache(
         sm_margin,
         return_softmax_lse,
         sinks,
+        out=out,
     )
-    if out is None:
-        return _load_fa3_kernels()["flash_attn_with_kvcache"](*args)
-    return _load_fa3_kernels()["flash_attn_with_kvcache"](*args, out=out)
 
 
 @debug_kernel_api
@@ -239,7 +237,5 @@ def flash_attn_varlen_func(
         sm_margin,
         return_softmax_lse,
         sinks,
+        out=out,
     )
-    if out is None:
-        return _load_fa3_kernels()["flash_attn_varlen_func"](*args)
-    return _load_fa3_kernels()["flash_attn_varlen_func"](*args, out=out)
