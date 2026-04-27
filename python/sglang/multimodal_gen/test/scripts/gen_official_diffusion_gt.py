@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Generate diffusion consistency GT from official/Diffusers pipelines.
 
