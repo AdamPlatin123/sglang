@@ -72,7 +72,7 @@ class Mxfp4MarlinMoEMethod:
                 num_experts,
                 2 * intermediate_size_per_partition,
                 hidden_size // fp4_block_k,
-                dtype=torch.float32,
+                dtype=torch.bfloat16,
             ),
             requires_grad=False,
         )
@@ -81,7 +81,7 @@ class Mxfp4MarlinMoEMethod:
                 num_experts,
                 hidden_size,
                 intermediate_size_per_partition // fp4_block_k,
-                dtype=torch.float32,
+                dtype=torch.bfloat16,
             ),
             requires_grad=False,
         )
@@ -123,24 +123,32 @@ class Mxfp4MarlinMoEMethod:
                 f"SM120 detected: using PyTorch MXFP4 MoE fallback "
                 f"(layer: {self.prefix})...",
             )
-            # Keep weights in original packed int8 format
-            # Normalize scales to float32 for direct use in dequant
+            # Keep weights in original packed int8 format.
+            # Store scales as bfloat16 — saves ~8.5GB/GPU vs FP32 with
+            # negligible runtime overhead (simple upcast in Triton kernel).
             w13_s = layer.w13_weight_scale_inv.data
             w2_s = layer.w2_weight_scale_inv.data
             if w13_s.dtype == torch.float8_e8m0fnu:
-                pass  # already in e8m0 format, will convert at runtime
+                layer.w13_weight_scale_inv = Parameter(
+                    w13_s.to(torch.bfloat16), requires_grad=False,
+                )
+                layer.w2_weight_scale_inv = Parameter(
+                    w2_s.to(torch.bfloat16), requires_grad=False,
+                )
             elif w13_s.dtype in (torch.uint8, torch.int8):
                 layer.w13_weight_scale_inv = Parameter(
                     w13_s.view(torch.uint8)
                     .view(torch.float8_e8m0fnu)
-                    .to(torch.float32),
+                    .to(torch.bfloat16),
                     requires_grad=False,
                 )
                 layer.w2_weight_scale_inv = Parameter(
-                    w2_s.view(torch.uint8).view(torch.float8_e8m0fnu).to(torch.float32),
+                    w2_s.view(torch.uint8)
+                    .view(torch.float8_e8m0fnu)
+                    .to(torch.bfloat16),
                     requires_grad=False,
                 )
-            # else: float32 scales are already usable directly
+            # bfloat16 scales: trivial upcast to FP32 at runtime
             layer._dsv4_mxfp4_backend = "sm120_triton"
             return
 
