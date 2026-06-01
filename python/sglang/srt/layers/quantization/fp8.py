@@ -998,14 +998,15 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         # WEIGHT_SCALES
         if self.is_fp4_expert:
             fp4_block_k = 32
-            # Use bfloat16 to save ~8.5GB/GPU vs FP32.
-            # Simple upcast to FP32 at runtime has negligible overhead.
+            # Use float32 for correct weight loading (checkpoint stores e8m0
+            # which numerically converts to float32).  process_weights_after_loading
+            # converts to uint8 (1 byte) for SM120 Triton in-kernel decode.
             w13_weight_scale = torch.nn.Parameter(
                 torch.ones(
                     num_experts,
                     2 * intermediate_size_per_partition,
                     hidden_size // fp4_block_k,
-                    dtype=torch.bfloat16,
+                    dtype=torch.float32,
                 ),
                 requires_grad=False,
             )
@@ -1014,7 +1015,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                     num_experts,
                     hidden_size,
                     intermediate_size_per_partition // fp4_block_k,
-                    dtype=torch.bfloat16,
+                    dtype=torch.float32,
                 ),
                 requires_grad=False,
             )

@@ -72,7 +72,7 @@ class Mxfp4MarlinMoEMethod:
                 num_experts,
                 2 * intermediate_size_per_partition,
                 hidden_size // fp4_block_k,
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             ),
             requires_grad=False,
         )
@@ -81,7 +81,7 @@ class Mxfp4MarlinMoEMethod:
                 num_experts,
                 hidden_size,
                 intermediate_size_per_partition // fp4_block_k,
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             ),
             requires_grad=False,
         )
@@ -124,31 +124,40 @@ class Mxfp4MarlinMoEMethod:
                 f"(layer: {self.prefix})...",
             )
             # Keep weights in original packed int8 format.
-            # Store scales as bfloat16 — saves ~8.5GB/GPU vs FP32 with
-            # negligible runtime overhead (simple upcast in Triton kernel).
+            # Store scales as raw uint8 (E8M0 exponent bytes) — 1 byte each,
+            # decoded in Triton kernel via exp2(x - 127).  Saves ~12.7 GB/GPU
+            # vs FP32 after processing_weights.
             w13_s = layer.w13_weight_scale_inv.data
             w2_s = layer.w2_weight_scale_inv.data
             if w13_s.dtype == torch.float8_e8m0fnu:
+                # E8M0 raw → uint8 view (same bytes, no conversion)
                 layer.w13_weight_scale_inv = Parameter(
-                    w13_s.to(torch.bfloat16), requires_grad=False,
+                    w13_s.view(torch.uint8), requires_grad=False,
                 )
                 layer.w2_weight_scale_inv = Parameter(
-                    w2_s.to(torch.bfloat16), requires_grad=False,
+                    w2_s.view(torch.uint8), requires_grad=False,
                 )
             elif w13_s.dtype in (torch.uint8, torch.int8):
+                # Already uint8/int8 — ensure uint8 view
                 layer.w13_weight_scale_inv = Parameter(
-                    w13_s.view(torch.uint8)
-                    .view(torch.float8_e8m0fnu)
-                    .to(torch.bfloat16),
+                    w13_s.view(torch.uint8), requires_grad=False,
+                )
+                layer.w2_weight_scale_inv = Parameter(
+                    w2_s.view(torch.uint8), requires_grad=False,
+                )
+            else:
+                # float32/bfloat16 loaded from checkpoint — convert back to
+                # e8m0 then view as uint8.  Values are exact powers of 2 so
+                # the round-trip float → e8m0 is lossless.
+                layer.w13_weight_scale_inv = Parameter(
+                    w13_s.to(torch.float8_e8m0fnu).view(torch.uint8),
                     requires_grad=False,
                 )
                 layer.w2_weight_scale_inv = Parameter(
-                    w2_s.view(torch.uint8)
-                    .view(torch.float8_e8m0fnu)
-                    .to(torch.bfloat16),
+                    w2_s.to(torch.float8_e8m0fnu).view(torch.uint8),
                     requires_grad=False,
                 )
-            # bfloat16 scales: trivial upcast to FP32 at runtime
+            # uint8 E8M0 scales: decoded in Triton kernel via exp2(x - 127)
             layer._dsv4_mxfp4_backend = "sm120_triton"
             return
 
